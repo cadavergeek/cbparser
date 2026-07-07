@@ -1,0 +1,5 @@
+prompt:Extract the data as a CSV with columns: name, level, rank, x, y, time. Do not include any other text.
+model:qwen2.5vl:7b
+ip:127.0.0.1
+port:11434
+format:plain
