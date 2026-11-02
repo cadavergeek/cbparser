@@ -7,6 +7,8 @@ from urllib.request import Request, urlopen
 
 from flask import Flask, render_template_string, request, jsonify
 
+from utils import clean_response, decode_config_value, encode_config_value
+
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = "uploads"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
@@ -102,14 +104,20 @@ HTML_TEMPLATE = r"""
     const acc = document.getElementById('accumulated');
 
     function cleanAccumulated() {
-      const targets = ["(Returning)", "`\n---\n`csv", "`csv", "```csv", "```", "`", "name,level,rank,x,y,time", "\n---\n"];
-      let val = acc.value;
-      for (const t of targets) {
-        val = val.split(t).join('');
+      const rows = [];
+      for (const block of acc.value.split('\n---\n')) {
+        const clean = block
+          .replace(/```[a-zA-Z0-9]*\n?/g, '')
+          .replace(/`/g, '')
+          .replace(/\(Returning\)/gi, '');
+        for (let line of clean.split(/\r?\n/)) {
+          line = line.trim();
+          if (!line) continue;
+          if (/^name\s*,/i.test(line)) continue;
+          rows.push(line);
+        }
       }
-      val = val.replace(/,/g, '\t');
-      val = val.replace(/\n{3,}/g, '\n\n').trim();
-      acc.value = val;
+      acc.value = rows.join('\n').replace(/,/g, '\t');
     }
 
     function addToAccumulated(text) {
@@ -276,18 +284,10 @@ def load_config() -> dict:
             if not line or ":" not in line:
                 continue
             key, _, val = line.partition(":")
-            cfg[key.strip()] = val.strip()
+            key = key.strip()
+            val = val.strip()
+            cfg[key] = decode_config_value(val) if key == "prompt" else val
     return cfg
-
-
-def clean_response(text: str) -> str:
-    import re
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-    text = re.sub(r"\*(.+?)\*", r"\1", text)
-    text = re.sub(r"`{1,3}(.+?)`{1,3}", r"\1", text)
-    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def ask_ollama(image_b64: str, prompt: str, model: str, ip: str, port: str, fmt: str = "plain") -> str:
@@ -355,7 +355,7 @@ def analyze():
         return jsonify({"html": "<p class='error'>No image was uploaded.</p>"})
     b64 = base64.b64encode(file.read()).decode("utf-8")
     ext = file.filename.rsplit(".", 1)[-1] if "." in file.filename else "png"
-    resp = ask_ollama(b64, prompt, config["model"], config["ip"], config["port"])
+    resp = ask_ollama(b64, prompt, config["model"], config["ip"], config["port"], fmt=config.get("format", "plain"))
     return jsonify({"html": _build_result_card(b64, ext, resp), "response": resp})
 
 
@@ -368,7 +368,7 @@ def analyze_base64():
     ext = data.get("ext", "png")
     if not b64:
         return jsonify({"html": "<p class='error'>No image data.</p>"})
-    resp = ask_ollama(b64, prompt, config["model"], config["ip"], config["port"])
+    resp = ask_ollama(b64, prompt, config["model"], config["ip"], config["port"], fmt=config.get("format", "plain"))
     return jsonify({"html": _build_result_card(b64, ext, resp), "response": resp})
 
 
@@ -386,7 +386,7 @@ def fetch_url():
         b64 = base64.b64encode(raw).decode("utf-8")
         ctype = resp.headers.get("Content-Type", "image/png")
         ext = ctype.split("/")[-1] if "/" in ctype else "png"
-        ollama_resp = ask_ollama(b64, prompt, config["model"], config["ip"], config["port"])
+        ollama_resp = ask_ollama(b64, prompt, config["model"], config["ip"], config["port"], fmt=config.get("format", "plain"))
         return jsonify({"html": _build_result_card(b64, ext, ollama_resp), "response": ollama_resp})
     except Exception as e:
         return jsonify({"html": f"<p class='error'>Error fetching URL: {e}</p>"})
@@ -395,14 +395,14 @@ def fetch_url():
 @app.route("/save-config", methods=["POST"])
 def save_config():
     cfg_path = os.path.join(os.path.dirname(__file__), "config.txt")
-    prompt = request.form.get("prompt", "").strip()
+    prompt = request.form.get("prompt", "").strip().replace("\r\n", "\n").replace("\r", "\n")
     model = request.form.get("model", "").strip()
     ip = request.form.get("ip", "").strip()
     port = request.form.get("port", "").strip()
     fmt = request.form.get("format", "plain").strip()
     try:
         with open(cfg_path, "w", encoding="utf-8") as f:
-            f.write(f"prompt:{prompt}\n")
+            f.write(f"prompt:{encode_config_value(prompt)}\n")
             f.write(f"model:{model}\n")
             f.write(f"ip:{ip}\n")
             f.write(f"port:{port}\n")

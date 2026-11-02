@@ -6,6 +6,8 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 import base64
 
+from utils import clean_response, decode_config_value
+
 IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 
 
@@ -17,7 +19,9 @@ def load_config(path: str) -> dict:
             if not line or ":" not in line:
                 continue
             key, _, val = line.partition(":")
-            config[key.strip()] = val.strip()
+            key = key.strip()
+            val = val.strip()
+            config[key] = decode_config_value(val) if key == "prompt" else val
     return config
 
 
@@ -57,6 +61,7 @@ def run_cli(folder: str):
     model = config.get("model", "llava")
     ip = config.get("ip", "127.0.0.1")
     port = config.get("port", "11434")
+    fmt = config.get("format", "plain")
 
     if not prompt:
         print("Error: 'prompt' is not set in config.txt")
@@ -91,6 +96,8 @@ def run_cli(folder: str):
                 all_results.append(f"{img_path.name}\nError: {result['error']}")
             else:
                 resp = result.get('response', 'no response')
+                if fmt == "plain":
+                    resp = clean_response(resp)
                 print(f"  Response: {resp}")
                 all_results.append(f"{img_path.name}\n{resp}")
         except Exception as e:
